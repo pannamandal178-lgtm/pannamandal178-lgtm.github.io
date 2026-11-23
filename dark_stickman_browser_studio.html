@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Dark Stickman 3D Studio — Mobile Test</title>
+<style>
+  :root{color-scheme:dark;--bg:#070910;--panel:#101522;--line:#263047;--text:#eef2ff;--muted:#9aa6bf;--accent:#a855f7}
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(ellipse at 50% 0%,#151329 0%,#080b14 55%,#05060a 100%);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh;display:flex;justify-content:center}
+  main{width:min(100%,980px);padding:14px;display:flex;flex-direction:column;gap:12px}
+  header{padding:5px 2px}
+  h1{font-size:20px;letter-spacing:.08em;margin:0 0 4px;font-weight:800}
+  .sub{color:var(--muted);font-size:12px;line-height:1.45}
+  .screen{position:relative;background:#03040a;border:1px solid #32364b;border-radius:14px;overflow:hidden;box-shadow:0 16px 50px #0009;aspect-ratio:16/9}
+  #output{display:block;width:100%;height:100%;object-fit:contain}
+  .tag{position:absolute;top:10px;left:10px;padding:5px 8px;border-radius:5px;background:#080b14bb;border:1px solid #ffffff22;font-size:10px;letter-spacing:.12em;color:#d8d5ff;pointer-events:none}
+  .controls{display:flex;gap:9px;flex-wrap:wrap}
+  button{border:1px solid #4b426b;background:#211936;color:white;border-radius:10px;padding:12px 14px;font-weight:700;font-size:13px;min-height:44px;flex:1;cursor:pointer}
+  button.primary{background:linear-gradient(120deg,#6d28d9,#9333ea);border-color:#a78bfa}
+  button:disabled{opacity:.45}
+  .status{background:#101522;border:1px solid var(--line);border-radius:10px;padding:10px 12px;color:#c9d2e7;font-size:12px;line-height:1.5;min-height:42px}
+  .notice{font-size:12px;line-height:1.55;color:#aeb8cc;padding:0 2px}
+  a.download{display:block;text-align:center;padding:13px;border-radius:10px;color:#fff;background:#163b32;text-decoration:none;font-weight:700;border:1px solid #2b856c}
+  .hidden{display:none}
+  @media(max-width:500px){main{padding:10px}h1{font-size:17px}.controls{gap:7px}button{font-size:12px;padding:11px 8px}}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>DARK STICKMAN · 3D TEST</h1>
+    <div class="sub">Mobile browser test scene · 30 seconds · 3D preview + WebM recording</div>
+  </header>
+  <div class="screen">
+    <canvas id="output" width="960" height="540" aria-label="3D Stickman animation preview"></canvas>
+    <div class="tag">REAL-TIME 3D SCENE</div>
+  </div>
+  <div class="controls">
+    <button id="play" class="primary">▶ Play 30-sec scene</button>
+    <button id="record">● Record video</button>
+    <button id="reset">↺ Reset</button>
+  </div>
+  <div id="status" class="status">Loading Three.js from the internet… Keep Chrome online. When the scene appears, tap Play or Record.</div>
+  <a id="download" class="download hidden" href="#" download="dark-stickman-test.webm">Download recorded video</a>
+  <div class="notice"><b>Important:</b> This first test checks 3D rendering and video recording on your phone. It records a silent <b>WebM</b> video, not MP4, and does not include Hindi voice yet. Keep this page open while recording. Performance depends on your phone and internet connection.</div>
+</main>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.187.0/build/three.module.js';
+
+const W=960,H=540,DURATION=30;
+const output=document.getElementById('output');
+const ctx=output.getContext('2d');
+const statusEl=document.getElementById('status');
+const playBtn=document.getElementById('play');
+const recordBtn=document.getElementById('record');
+const resetBtn=document.getElementById('reset');
+const downloadLink=document.getElementById('download');
+
+const renderCanvas=document.createElement('canvas');
+renderCanvas.width=W; renderCanvas.height=H;
+let renderer, scene, camera, hero, hunter, portal, energy, rain, rainPositions;
+let running=false, startAt=performance.now(), elapsed=0, recorder=null, chunks=[];
+let raf=0, lastSubtitle='';
+
+function setStatus(text){statusEl.textContent=text;}
+function mat(color,emissive=0x000000,roughness=.8){return new THREE.MeshStandardMaterial({color,emissive,emissiveIntensity:emissive?1.4:0,roughness,metalness:.1});}
+function limb(parent, a, b, radius, material){
+  const A=new THREE.Vector3(...a), B=new THREE.Vector3(...b), dir=new THREE.Vector3().subVectors(B,A);
+  const mesh=new THREE.Mesh(new THREE.CylinderGeometry(radius*.78,radius,dir.length(),8),material);
+  mesh.position.copy(A).add(B).multiplyScalar(.5); mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir.normalize()); parent.add(mesh); return mesh;
+}
+function joint(parent,p,r,material){const m=new THREE.Mesh(new THREE.SphereGeometry(r,10,8),material);m.position.set(...p);parent.add(m);return m;}
+function makeCharacter(kind){
+  const root=new THREE.Group();
+  const dark=mat(kind==='hero'?0x171b2b:0x08090d), cloth=mat(kind==='hero'?0x7d1832:0x171923), metal=mat(kind==='hero'?0x343c52:0x6c7180), glow= new THREE.MeshStandardMaterial({color:kind==='hero'?0xff344f:0xdde5ff,emissive:kind==='hero'?0xff102b:0x9fb7ff,emissiveIntensity:3});
+  const body=new THREE.Mesh(new THREE.CapsuleGeometry(.28,.68,4,8),cloth); body.position.y=1.52; root.add(body);
+  const belt=new THREE.Mesh(new THREE.CylinderGeometry(.27,.26,.12,10),metal);belt.position.y=1.12;root.add(belt);
+  const head=new THREE.Mesh(new THREE.SphereGeometry(.27,14,12),dark);head.position.set(0,2.23,.015);root.add(head);
+  // Deep shadow over the face with narrow glowing eyes.
+  const mask=new THREE.Mesh(new THREE.SphereGeometry(.245,12,10),mat(kind==='hero'?0x03050a:0x020307));mask.scale.set(1,.78,.48);mask.position.set(0,2.22,.22);root.add(mask);
+  for(const x of [-.105,.105]){const eye=new THREE.Mesh(new THREE.BoxGeometry(.075,.024,.018),glow);eye.position.set(x,2.245,.34);root.add(eye);}
+  // Hair spikes on the hero; hood-like crown for the masked hunter.
+  if(kind==='hero'){
+    for(let i=0;i<7;i++){const spike=new THREE.Mesh(new THREE.ConeGeometry(.075,.28,5),dark);spike.position.set((i-3)*.065,2.48+(i%2)*.035,0);spike.rotation.z=(i-3)*-.18;root.add(spike);}
+  }else{
+    const hood=new THREE.Mesh(new THREE.SphereGeometry(.31,12,10),mat(0x05060a));hood.scale.set(1,1.03,.8);hood.position.set(0,2.31,-.025);root.add(hood);
+    const face2=new THREE.Mesh(new THREE.SphereGeometry(.235,12,10),mat(0x020307));face2.scale.set(1,.8,.42);face2.position.set(0,2.22,.22);root.add(face2);
+  }
+  // Arms and legs as separate animated sticks.
+  const pivots={};
+  for(const side of [-1,1]){
+    const shoulder=[side*.29,1.86,0], elbow=[side*.43,1.48,.02], hand=[side*.5,1.13,.05];
+    limb(root,shoulder,elbow,.075,metal); limb(root,elbow,hand,.06,dark); joint(root,elbow,.08,metal);
+    const hip=[side*.14,1.0,0], knee=[side*.17,.57,.03], foot=[side*.18,.12,.14];
+    limb(root,hip,knee,.09,cloth); limb(root,knee,foot,.068,dark); joint(root,knee,.085,metal);
+    const boot=new THREE.Mesh(new THREE.BoxGeometry(.18,.13,.32),mat(0x080a10));boot.position.set(...foot);root.add(boot);
+    pivots['arm'+side]=root.children[root.children.length-1];
+  }
+  const cape=new THREE.Mesh(new THREE.ConeGeometry(.42,.9,5),mat(kind==='hero'?0x260916:0x07080d));cape.position.set(0,1.38,-.24);cape.rotation.x=Math.PI;root.add(cape);
+  root.userData={kind}; root.scale.setScalar(kind==='hero'?1.0:1.12);
+  return root;
+}
+
+function init(){
+  scene=new THREE.Scene(); scene.background=new THREE.Color(0x050711); scene.fog=new THREE.FogExp2(0x080a16,.045);
+  camera=new THREE.PerspectiveCamera(42,W/H,.1,100);camera.position.set(0,3.7,11.8);camera.lookAt(0,1.3,0);
+  renderer=new THREE.WebGLRenderer({canvas:renderCanvas,antialias:true,alpha:false,powerPreference:'low-power'});
+  renderer.setPixelRatio(1); renderer.setSize(W,H,false); renderer.outputColorSpace=THREE.SRGBColorSpace;
+  scene.add(new THREE.HemisphereLight(0x7780b8,0x080914,1.4));
+  const key=new THREE.DirectionalLight(0xcbd5ff,2.1);key.position.set(-4,7,6);scene.add(key);
+  const red=new THREE.PointLight(0xff183d,32,9);red.position.set(-3,3,1);scene.add(red);
+  const blue=new THREE.PointLight(0x3d5cff,26,10);blue.position.set(3,3,-2);scene.add(blue);
+  const ground=new THREE.Mesh(new THREE.PlaneGeometry(80,80),mat(0x090d18));ground.rotation.x=-Math.PI/2;ground.position.y=-.02;scene.add(ground);
+  const grid=new THREE.GridHelper(80,60,0x3a294b,0x171d31);grid.position.y=.005;scene.add(grid);
+  // Broken city silhouettes along the horizon.
+  for(let i=0;i<28;i++){
+    const x=(i-14)*1.45, z=-5-(i%4)*1.2, height=1.5+(i*7%8)*.48;
+    const b=new THREE.Mesh(new THREE.BoxGeometry(.9,height,.8),mat(i%3===0?0x10152a:0x0b1020));b.position.set(x,height/2,z);scene.add(b);
+    for(let y=.35;y<height-.2;y+=.42){if((i+Math.round(y*10))%3===0){const win=new THREE.Mesh(new THREE.BoxGeometry(.12,.07,.015),new THREE.MeshBasicMaterial({color:0x6d3158}));win.position.set(x-.12,y,z+.408);scene.add(win);}}
+  }
+  hero=makeCharacter('hero');hero.position.set(-1.55,0,.25);scene.add(hero);
+  hunter=makeCharacter('hunter');hunter.position.set(1.7,0,-.15);hunter.rotation.y=-.12;scene.add(hunter);
+  portal=new THREE.Group();portal.position.set(2.2,2.25,-1.2);scene.add(portal);
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(1.05,.075,10,48),new THREE.MeshStandardMaterial({color:0x8129de,emissive:0x6715cf,emissiveIntensity:3,metalness:.4,roughness:.25}));portal.add(ring);
+  const inner=new THREE.Mesh(new THREE.CircleGeometry(.96,48),new THREE.MeshBasicMaterial({color:0x1b0733,transparent:true,opacity:.75,side:THREE.DoubleSide}));portal.add(inner);
+  for(let i=0;i<16;i++){const p=new THREE.Mesh(new THREE.SphereGeometry(.045,6,5),new THREE.MeshBasicMaterial({color:i%2?0xff174b:0x9b5cff}));const a=i/16*Math.PI*2;p.position.set(Math.cos(a)*1.08,Math.sin(a)*1.08,.03);portal.add(p);}
+  energy=new THREE.Mesh(new THREE.SphereGeometry(.22,14,12),new THREE.MeshStandardMaterial({color:0xff274b,emissive:0xff1437,emissiveIntensity:4}));energy.position.set(-1.55,1.55,.55);scene.add(energy);
+  const energyLight=new THREE.PointLight(0xff1644,0,4);energyLight.position.copy(energy.position);scene.add(energyLight);energy.userData.light=energyLight;
+  // Light-weight rain point cloud.
+  const count=420;rainPositions=new Float32Array(count*3);
+  for(let i=0;i<count;i++){rainPositions[i*3]=(Math.random()-.5)*22;rainPositions[i*3+1]=Math.random()*10;rainPositions[i*3+2]=(Math.random()-.5)*15-1;}
+  const rainGeo=new THREE.BufferGeometry();rainGeo.setAttribute('position',new THREE.BufferAttribute(rainPositions,3));
+  rain=new THREE.Points(rainGeo,new THREE.PointsMaterial({color:0x9ba9d7,size:.025,transparent:true,opacity:.55}));scene.add(rain);
+  setStatus('3D scene ready. Tap “Play 30-sec scene” to preview, or “Record video” to save a silent WebM clip.');
+  drawFrame(0);
+}
+
+function subtitleAt(t){
+  if(t<4)return ['आधी रात… शहर फिर से जाग रहा था।','MIDNIGHT · THE CITY IS NOT EMPTY'];
+  if(t<8)return ['कौन है वहाँ? सामने आओ!','SHADOW SENSES A PRESENCE'];
+  if(t<12)return ['तुम्हारा इंतज़ार था, Shadow.','THE HUNTER EMERGES'];
+  if(t<17)return ['आज तुम्हारी शक्ति… मेरी होगी!','A DARK POWER AWAKENS'];
+  if(t<22)return ['अब देखो… असली शक्ति!','ENERGY COLLISION'];
+  if(t<26)return ['तुम… मेरे जैसे कैसे हो?','THE MASK BEGINS TO CRACK'];
+  return ['क्योंकि… मैं तुम्हारा दूसरा रूप हूँ!','THE SECOND SHADOW'];
+}
+function clamp01(x){return Math.max(0,Math.min(1,x));}
+function ease(a,b,t){let x=clamp01((t-a)/(b-a));return x*x*(3-2*x);}
+function drawFrame(t){
+  elapsed=t;
+  const approach=ease(4,9,t), clash=ease(13,16,t)*(1-ease(19,22,t)), reveal=ease(22,27,t);
+  hero.position.x=-1.55+.48*approach+Math.sin(t*2.1)*.045;
+  hunter.position.x=1.7-.42*approach;
+  hero.rotation.y=.08*Math.sin(t*1.7); hunter.rotation.y=-.12-.07*Math.sin(t*1.4);
+  hero.position.y=(t>14&&t<19)?Math.sin((t-14)/5*Math.PI)*.18:0;
+  hunter.position.y=(t>15&&t<20)?Math.sin((t-15)/5*Math.PI)*.12:0;
+  hero.rotation.z=(t>15&&t<18)?-.2*Math.sin((t-15)/3*Math.PI):0;
+  hunter.rotation.z=(t>16&&t<19)?.16*Math.sin((t-16)/3*Math.PI):0;
+  portal.visible=t>3.5;
+  portal.rotation.z=t*.45;portal.scale.setScalar(.25+.75*ease(4,8,t));
+  energy.position.set(-1.05+Math.sin(t*3)*.12,1.55+.18*Math.sin(t*4),.65);
+  const burst=Math.max(0,1-Math.abs(t-17.2)/1.6);
+  energy.scale.setScalar(.5+burst*3.4);energy.material.emissiveIntensity=2+burst*5;energy.userData.light.intensity=burst*32;
+  camera.position.x=Math.sin(t*.22)*.28;camera.position.y=3.65+Math.sin(t*.45)*.06;camera.lookAt(0,1.25,0);
+  if(t>21){hunter.children.forEach((obj)=>{if(obj.isMesh&&obj.material&&obj.material.emissive){obj.material.emissiveIntensity=1.2+reveal*2;}});}
+  const positions=rain.geometry.attributes.position.array;
+  for(let i=0;i<positions.length/3;i++){positions[i*3+1]-=.075;if(positions[i*3+1]<0){positions[i*3+1]=9;positions[i*3]=(Math.random()-.5)*22;}}
+  rain.geometry.attributes.position.needsUpdate=true;
+  renderer.render(scene,camera);
+  ctx.clearRect(0,0,W,H);ctx.drawImage(renderCanvas,0,0,W,H);
+  const [line,small]=subtitleAt(t);
+  const grad=ctx.createLinearGradient(0,H-115,0,H);grad.addColorStop(0,'rgba(0,0,0,0)');grad.addColorStop(1,'rgba(0,0,0,.86)');ctx.fillStyle=grad;ctx.fillRect(0,H-115,W,115);
+  ctx.textAlign='center';ctx.shadowColor='#000';ctx.shadowBlur=8;
+  ctx.font='bold 25px system-ui, sans-serif';ctx.fillStyle='#ffffff';ctx.fillText(line,W/2,H-48);
+  ctx.font='bold 12px system-ui, sans-serif';ctx.fillStyle='#c8b7ef';ctx.fillText(small,W/2,H-22);ctx.shadowBlur=0;
+  ctx.fillStyle='#d5d8ea';ctx.font='11px system-ui';ctx.textAlign='right';ctx.fillText('00:'+String(Math.floor(t)).padStart(2,'0')+' / 00:30',W-18,24);
+}
+function animate(now){
+  if(running){const t=Math.min(DURATION,(now-startAt)/1000);drawFrame(t);if(t>=DURATION){running=false;playBtn.disabled=false;recordBtn.disabled=false;setStatus('Scene finished. Replay it or record the 30-second clip.');}}
+  else if(!recorder||recorder.state!=='recording'){drawFrame(elapsed);}
+  raf=requestAnimationFrame(animate);
+}
+function play(){
+  if(recorder&&recorder.state==='recording')return;
+  elapsed=0;startAt=performance.now();running=true;playBtn.disabled=true;recordBtn.disabled=false;downloadLink.classList.add('hidden');setStatus('Playing the 30-second 3D scene…');
+}
+function record(){
+  if(!('MediaRecorder'in window)||!output.captureStream){setStatus('This browser does not support canvas video recording. Try the latest Chrome.');return;}
+  try{
+    const stream=output.captureStream(30);let type='video/webm';
+    if(MediaRecorder.isTypeSupported('video/webm;codecs=vp9'))type='video/webm;codecs=vp9';
+    else if(MediaRecorder.isTypeSupported('video/webm;codecs=vp8'))type='video/webm;codecs=vp8';
+    recorder=new MediaRecorder(stream,{mimeType:type,videoBitsPerSecond:3500000});chunks=[];
+    recorder.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};
+    recorder.onerror=()=>{recordBtn.disabled=false;playBtn.disabled=false;setStatus('Recording failed on this device. Try closing other apps and recording again.');};
+    recorder.onstop=()=>{
+      const blob=new Blob(chunks,{type:'video/webm'});const url=URL.createObjectURL(blob);
+      downloadLink.href=url;downloadLink.download='dark-stickman-test.webm';downloadLink.classList.remove('hidden');
+      recordBtn.disabled=false;playBtn.disabled=false;running=false;setStatus('Recording complete. Tap “Download recorded video” to save the WebM file to your phone.');
+      stream.getTracks().forEach(track=>track.stop());
+    };
+    elapsed=0;drawFrame(0);startAt=performance.now();running=true;playBtn.disabled=true;recordBtn.disabled=true;downloadLink.classList.add('hidden');
+    recorder.start(1000);setStatus('Recording 30 seconds… Keep this tab open and do not lock your phone.');
+    setTimeout(()=>{if(recorder&&recorder.state==='recording')recorder.stop();},DURATION*1000+150);
+  }catch(err){setStatus('Could not start recording: '+(err&&err.message?err.message:'unsupported format on this device.'));recordBtn.disabled=false;playBtn.disabled=false;}
+}
+playBtn.addEventListener('click',play);
+recordBtn.addEventListener('click',record);
+resetBtn.addEventListener('click',()=>{if(recorder&&recorder.state==='recording')recorder.stop();running=false;elapsed=0;startAt=performance.now();playBtn.disabled=false;recordBtn.disabled=false;downloadLink.classList.add('hidden');drawFrame(0);setStatus('Scene reset. Tap Play or Record when ready.');});
+try{init();raf=requestAnimationFrame(animate);}catch(err){setStatus('3D could not start: '+(err&&err.message?err.message:'unknown error')+'. Check internet and reload this page.');console.error(err);}
+</script>
+</body>
+</html>
